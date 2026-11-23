@@ -95,6 +95,7 @@ type App struct {
 	roots                         []string
 	projectsMu                    sync.RWMutex
 	projects                      map[string]Project
+	backupDeleteMu                sync.Mutex
 	taskMu                        sync.Mutex
 	projectLocks                  map[string]*sync.Mutex
 	queue                         chan string
@@ -199,6 +200,9 @@ CREATE TABLE IF NOT EXISTS backups (id TEXT PRIMARY KEY, project_id TEXT NOT NUL
 	if _, err = db.Exec(`UPDATE tasks SET status='interrupted', error='server restarted while task was running', finished_at=? WHERE status IN ('queued','running')`, a.now().UTC().Format(time.RFC3339Nano)); err != nil {
 		db.Close()
 		return nil, err
+	}
+	if err := a.recoverStagedBackupDeletes(); err != nil {
+		log.Printf("recover staged backup deletions: %v", err)
 	}
 	return a, nil
 }
@@ -1031,6 +1035,7 @@ func (a *App) handler() http.Handler {
 	mux.HandleFunc("GET /api/backups", a.requireAuth(a.backupsHandler))
 	mux.HandleFunc("GET /api/backups/{id}/download", a.requireAuth(a.downloadBackup))
 	mux.HandleFunc("DELETE /api/backups/{id}", a.requireAuth(a.deleteBackup))
+	mux.HandleFunc("DELETE /api/backups/batch", a.requireAuth(a.deleteBackups))
 	web, _ := fs.Sub(webFiles, "web/dist")
 	mux.Handle("/", http.FileServer(http.FS(web)))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1397,6 +1402,48 @@ func (a *App) backupByID(id string) (Backup, error) {
 	}
 	return b, nil
 }
+func (a *App) recoverStagedBackupDeletes() error {
+	entries, err := os.ReadDir(a.backupDir)
+	if err != nil {
+		return err
+	}
+	const prefix = ".orca-delete-"
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasPrefix(entry.Name(), prefix) || !strings.HasSuffix(entry.Name(), ".tmp") {
+			continue
+		}
+		name := strings.TrimSuffix(strings.TrimPrefix(entry.Name(), prefix), ".tmp")
+		separator := strings.IndexByte(name, '-')
+		if separator != 24 {
+			continue
+		}
+		id := name[:separator]
+		if _, err := hex.DecodeString(id); err != nil {
+			continue
+		}
+		temporary := filepath.Join(a.backupDir, entry.Name())
+		backup, err := a.backupByID(id)
+		if errors.Is(err, sql.ErrNoRows) {
+			if err := os.Remove(temporary); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if _, err := os.Lstat(backup.File); errors.Is(err, os.ErrNotExist) {
+			if err := os.Rename(temporary, backup.File); err != nil {
+				return err
+			}
+		} else if err != nil {
+			return err
+		} else if err := os.Remove(temporary); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	return nil
+}
 func (a *App) downloadBackup(w http.ResponseWriter, r *http.Request) {
 	b, e := a.backupByID(r.PathValue("id"))
 	if e != nil {
@@ -1408,6 +1455,8 @@ func (a *App) downloadBackup(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, b.File)
 }
 func (a *App) deleteBackup(w http.ResponseWriter, r *http.Request) {
+	a.backupDeleteMu.Lock()
+	defer a.backupDeleteMu.Unlock()
 	b, e := a.backupByID(r.PathValue("id"))
 	if e != nil {
 		errorReply(w, 404, "backup not found")
@@ -1422,6 +1471,126 @@ func (a *App) deleteBackup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+func (a *App) deleteBackups(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		IDs []string `json:"ids"`
+	}
+	if err := decodeJSON(r, &in); err != nil {
+		errorReply(w, http.StatusBadRequest, "invalid backup id list")
+		return
+	}
+	if len(in.IDs) == 0 || len(in.IDs) > 1000 {
+		errorReply(w, http.StatusBadRequest, "select between 1 and 1000 backups")
+		return
+	}
+	a.backupDeleteMu.Lock()
+	defer a.backupDeleteMu.Unlock()
+	seen := make(map[string]bool, len(in.IDs))
+	backups := make([]Backup, 0, len(in.IDs))
+	for _, id := range in.IDs {
+		if id == "" || seen[id] {
+			errorReply(w, http.StatusBadRequest, "backup ids must be non-empty and unique")
+			return
+		}
+		seen[id] = true
+		backup, err := a.backupByID(id)
+		if errors.Is(err, sql.ErrNoRows) {
+			errorReply(w, http.StatusNotFound, "one or more backups were not found")
+			return
+		}
+		if err != nil {
+			errorReply(w, http.StatusInternalServerError, "could not validate backup path")
+			return
+		}
+		backups = append(backups, backup)
+	}
+
+	staged := make([][2]string, 0, len(backups))
+	restoreFiles := func() {
+		for i := len(staged) - 1; i >= 0; i-- {
+			original, temporary := staged[i][0], staged[i][1]
+			if _, err := os.Lstat(original); err == nil {
+				log.Printf("bulk backup delete rollback skipped occupied path %q", original)
+				continue
+			}
+			if err := os.Rename(temporary, original); err != nil {
+				log.Printf("bulk backup delete rollback failed for %q: %v", original, err)
+			}
+		}
+	}
+	for _, backup := range backups {
+		info, err := os.Lstat(backup.File)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			restoreFiles()
+			errorReply(w, http.StatusInternalServerError, "could not inspect backup file")
+			return
+		}
+		if !info.Mode().IsRegular() && info.Mode()&os.ModeSymlink == 0 {
+			restoreFiles()
+			errorReply(w, http.StatusInternalServerError, "backup path is not a file")
+			return
+		}
+		temporary, err := os.CreateTemp(a.backupDir, ".orca-delete-"+backup.ID+"-*.tmp")
+		if err != nil {
+			restoreFiles()
+			errorReply(w, http.StatusInternalServerError, "could not stage backup files")
+			return
+		}
+		temporaryName := temporary.Name()
+		if err = temporary.Close(); err != nil {
+			_ = os.Remove(temporaryName)
+			restoreFiles()
+			errorReply(w, http.StatusInternalServerError, "could not stage backup files")
+			return
+		}
+		if err = os.Rename(backup.File, temporaryName); errors.Is(err, os.ErrNotExist) {
+			_ = os.Remove(temporaryName)
+			continue
+		} else if err != nil {
+			_ = os.Remove(temporaryName)
+			restoreFiles()
+			errorReply(w, http.StatusInternalServerError, "could not stage backup files")
+			return
+		}
+		staged = append(staged, [2]string{backup.File, temporaryName})
+	}
+
+	tx, err := a.db.Begin()
+	if err != nil {
+		restoreFiles()
+		errorReply(w, http.StatusInternalServerError, "could not begin backup deletion")
+		return
+	}
+	defer tx.Rollback()
+	for _, id := range in.IDs {
+		result, err := tx.Exec(`DELETE FROM backups WHERE id=?`, id)
+		if err != nil {
+			restoreFiles()
+			errorReply(w, http.StatusInternalServerError, "could not remove backup records")
+			return
+		}
+		count, err := result.RowsAffected()
+		if err != nil || count != 1 {
+			restoreFiles()
+			errorReply(w, http.StatusConflict, "backup list changed; refresh and try again")
+			return
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		restoreFiles()
+		errorReply(w, http.StatusInternalServerError, "could not commit backup deletion")
+		return
+	}
+	for _, item := range staged {
+		if err := os.Remove(item[1]); err != nil && !errors.Is(err, os.ErrNotExist) {
+			log.Printf("bulk backup delete left temporary file %q: %v", item[1], err)
+		}
+	}
+	jsonReply(w, http.StatusOK, map[string]int{"deleted": len(in.IDs)})
 }
 func (a *App) logsHandler(w http.ResponseWriter, r *http.Request) {
 	p, ok := a.getProject(r.PathValue("id"))

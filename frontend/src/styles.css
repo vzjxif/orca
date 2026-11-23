@@ -455,3 +455,17 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .modal-actions > button { flex: 1; }
   .toast { right: 12px; bottom: 12px; left: 12px; max-width: none; }
 }
+
+.backup-bulk-toolbar { display: flex; align-items: center; gap: 14px; margin: 0 0 16px; padding: 12px 15px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); }
+.backup-select-all, .backup-select { display: inline-flex; align-items: center; justify-content: center; gap: 8px; color: var(--ink); font-size: 13px; cursor: pointer; }
+.backup-select-all { font-weight: 650; }
+.backup-select-all input, .backup-select input { width: 17px; height: 17px; margin: 0; accent-color: var(--red); cursor: pointer; }
+.backup-selected-count { margin-left: auto; color: #77766f; font: 11px var(--mono); }
+.backup-card.selected { border-color: var(--red) !important; box-shadow: 0 0 0 1px var(--red) !important; }
+.backup-select { flex: none; padding: 4px; border-radius: 8px; }
+.backup-select:has(input:focus-visible), .backup-select-all:has(input:focus-visible) { outline: 2px solid var(--red); outline-offset: 2px; }
+@media (max-width: 520px) {
+  .backup-bulk-toolbar { flex-wrap: wrap; gap: 10px; }
+  .backup-selected-count { margin-left: auto; }
+  .backup-bulk-toolbar > button { width: 100%; }
+}
