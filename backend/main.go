@@ -41,7 +41,8 @@ const maxBody = 1 << 20
 const maxPasswordBytes = 72
 
 type Settings struct {
-	Roots []string `json:"roots"`
+	Roots        []string `json:"roots"`
+	ManagedByEnv bool     `json:"managedByEnv,omitempty"`
 }
 type Project struct {
 	ID          string   `json:"id"`
@@ -93,6 +94,7 @@ type App struct {
 	authMu                        sync.Mutex
 	rootsMu                       sync.RWMutex
 	roots                         []string
+	rootsFromEnv                  bool
 	projectsMu                    sync.RWMutex
 	projects                      map[string]Project
 	taskMu                        sync.Mutex
@@ -195,6 +197,21 @@ CREATE TABLE IF NOT EXISTS backups (id TEXT PRIMARY KEY, project_id TEXT NOT NUL
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		db.Close()
 		return nil, err
+	}
+	if envRoot := strings.TrimSpace(os.Getenv("ORCA_PROJECTS_PATH")); envRoot != "" {
+		root, err := safePath(envRoot)
+		if err != nil {
+			db.Close()
+			return nil, fmt.Errorf("ORCA_PROJECTS_PATH must name an existing absolute directory: %w", err)
+		}
+		roots := []string{root}
+		stored, _ := json.Marshal(Settings{Roots: roots})
+		if _, err = db.Exec(`INSERT INTO settings(id,roots) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET roots=excluded.roots`, string(stored)); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("persist ORCA_PROJECTS_PATH: %w", err)
+		}
+		a.roots = roots
+		a.rootsFromEnv = true
 	}
 	if _, err = db.Exec(`UPDATE tasks SET status='interrupted', error='server restarted while task was running', finished_at=? WHERE status IN ('queued','running')`, a.now().UTC().Format(time.RFC3339Nano)); err != nil {
 		db.Close()
@@ -1156,9 +1173,13 @@ func (a *App) logout(w http.ResponseWriter, r *http.Request) {
 func (a *App) getSettings(w http.ResponseWriter, r *http.Request) {
 	a.rootsMu.RLock()
 	defer a.rootsMu.RUnlock()
-	jsonReply(w, 200, Settings{Roots: append([]string{}, a.roots...)})
+	jsonReply(w, 200, Settings{Roots: append([]string{}, a.roots...), ManagedByEnv: a.rootsFromEnv})
 }
 func (a *App) putSettings(w http.ResponseWriter, r *http.Request) {
+	if a.rootsFromEnv {
+		errorReply(w, http.StatusConflict, "scan roots are managed by ORCA_PROJECTS_PATH; update the service environment and restart Orca")
+		return
+	}
 	var s Settings
 	if e := decodeJSON(r, &s); e != nil {
 		errorReply(w, 400, "invalid settings JSON")

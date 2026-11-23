@@ -156,6 +156,7 @@ func TestBackupContainsOnlyAllowedFilesAndManifest(t *testing.T) {
 }
 
 func TestAuthOriginAndSettingsAPI(t *testing.T) {
+	t.Setenv("ORCA_PROJECTS_PATH", "")
 	base := t.TempDir()
 	root := filepath.Join(base, "projects")
 	if err := os.Mkdir(root, 0700); err != nil {
