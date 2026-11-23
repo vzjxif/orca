@@ -455,5 +455,3 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .modal-actions > button { flex: 1; }
   .toast { right: 12px; bottom: 12px; left: 12px; max-width: none; }
 }
-
-.settings-panel textarea[readonly] { cursor: default; opacity: .88; }

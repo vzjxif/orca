@@ -21,15 +21,15 @@
 ## 飞牛部署
 
 1. 将本项目放到飞牛独立目录，例如 `/vol1/1000/apps/orca`。
-2. 复制 `.env.example` 为 `.env`，设置 `ORCA_PROJECTS_PATH` 扫描根目录、独立备份目录和长随机初始管理员密码。扫描目录必须与下面的 Compose 宿主机挂载路径一致。内网直接访问需将 `ORCA_BIND_ADDRESS` 改为飞牛内网 IP。
+2. 复制 `.env.example` 为 `.env`，填写真实项目根目录、独立备份目录和长随机初始管理员密码。内网直接访问需将 `ORCA_BIND_ADDRESS` 改为飞牛内网 IP。
 3. 执行 `docker compose up -d --build`。
 4. 浏览器访问 `http://飞牛内网IP:7788`，使用设置的管理员账号密码登录。
-5. Orca 会从服务环境变量 `ORCA_PROJECTS_PATH` 读取扫描根目录；进入“扫描设置”确认当前值，然后点击“扫描项目”。该目录由服务托管，页面中只读。更换目录时编辑 `.env`，并保持 Compose 挂载的宿主机路径和容器路径一致，然后重建/重启 Orca。
+5. 设置扫描根目录并执行扫描。
 6. 在“账户设置”填写当前密码、新密码与确认密码。修改成功会注销所有会话，请用新密码重新登录。
 
 环境变量 `ORCA_ADMIN_USER` 和 `ORCA_ADMIN_PASSWORD` 仅在数据库没有管理员时初始化账号。首次登录并修改密码后，可从 `.env` 移除 `ORCA_ADMIN_PASSWORD`；密码以 bcrypt 哈希保存于 Orca 数据卷，后续环境变量不会覆盖数据库账号。新密码要求 12–72 个 UTF-8 字节；请保留 Orca 数据卷。
 
-`compose.yaml` 会把 `.env` 中的 `ORCA_PROJECTS_PATH` 同时作为容器扫描环境变量和 bind mount 源/目标，例如 `/vol1/1000/docker:/vol1/1000/docker`。宿主机目录和容器内路径必须保持一致；路径更新后重建或重启服务使环境变量生效。当前服务配置一个扫描根目录。
+项目目录挂载必须保持宿主机与容器内绝对路径相同，例如 `/vol1/1000/docker:/vol1/1000/docker`。否则 Compose 的相对绑定目录会指向错误位置。多个扫描根目录需要在 Orca 自身 Compose 中增加对应的同路径挂载。
 
 Orca 数据保存在 `orca-data` 卷，备份保存在单独挂载的目录。管理功能需要 Docker socket，因此管理员等同于拥有宿主机 Docker 管理权限。仅向可信内网或受 HTTPS 保护的反向代理开放。
 

@@ -11,7 +11,6 @@ services:
       # 仅首次初始化需要；账号创建后可从 .env 移除该变量
       ORCA_ADMIN_PASSWORD: ${ORCA_ADMIN_PASSWORD:-}
       ORCA_DATA_DIR: /var/lib/orca
-      ORCA_PROJECTS_PATH: ${ORCA_PROJECTS_PATH:?请设置 Compose 项目扫描根目录}
       ORCA_BACKUP_DIR: /backups
       TZ: Asia/Shanghai
     volumes:
