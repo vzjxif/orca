@@ -1,0 +1,22 @@
+services:
+  orca:
+    build: .
+    image: orca:local
+    container_name: orca
+    restart: unless-stopped
+    ports:
+      - "${ORCA_BIND_ADDRESS:-127.0.0.1}:${ORCA_PORT:-7788}:8080"
+    environment:
+      ORCA_ADMIN_USER: ${ORCA_ADMIN_USER:-admin}
+      # 仅首次初始化需要；账号创建后可从 .env 移除该变量
+      ORCA_ADMIN_PASSWORD: ${ORCA_ADMIN_PASSWORD:-}
+      ORCA_DATA_DIR: /var/lib/orca
+      ORCA_BACKUP_DIR: /backups
+      TZ: Asia/Shanghai
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${ORCA_PROJECTS_PATH:?请设置项目根目录}:${ORCA_PROJECTS_PATH}
+      - orca-data:/var/lib/orca
+      - ${ORCA_BACKUPS_PATH:?请设置独立备份目录}:/backups
+volumes:
+  orca-data:

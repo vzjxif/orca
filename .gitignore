@@ -1,0 +1,16 @@
+.env
+.test-backups/
+frontend/node_modules/
+frontend/dist/
+*.tsbuildinfo
+backend/orca
+backend/backend
+*.db
+*.db-shm
+*.db-wal
+.orca/
+*.sqlite
+*.sqlite3
+*.log
+.DS_Store
+coverage/

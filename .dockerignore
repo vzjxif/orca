@@ -1,0 +1,16 @@
+.git
+.env
+.test-backups/
+**/node_modules
+frontend/dist
+**/*.tsbuildinfo
+backend/orca
+backend/backend
+**/*_test.go
+**/*.db
+**/*.sqlite
+**/*.sqlite3
+**/*.log
+**/*.tsbuildinfo
+.DS_Store
+coverage/
